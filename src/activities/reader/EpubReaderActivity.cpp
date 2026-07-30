@@ -1670,17 +1670,22 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     const int gwBytes = renderer.getDisplayWidthBytes();
     const size_t planeBytes = static_cast<size_t>(gwBytes) * gh;
 
-    // Render one plane band-by-band into a whole-plane buffer without touching
-    // the controller, so it can run while the refresh is still in flight.
+    // Render one plane into a whole-plane buffer without touching the
+    // controller, so it can run while the refresh is still in flight.
+    //
+    // Targeted as a single full-height band, not STRIP_ROWS-tall slices: `buf`
+    // already holds the entire plane, so slicing bought nothing here and cost
+    // ceil(gh/STRIP_ROWS) - 1 extra page walks per plane. Glyph culling
+    // (glyphIntersectsStrip) skips the bitmap decode for out-of-band glyphs, but
+    // the walk above it still ran in full every pass -- TextBlock traversal plus
+    // drawText's per-word measurement and shaping. The strip-scratch tier below
+    // still slices, because there its buffer really is only one band.
     auto renderPlaneToBuffer = [&](const bool lsbPlane, uint8_t* buf) {
       renderer.setRenderMode(lsbPlane ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
-      for (int y = 0; y < gh; y += STRIP_ROWS) {
-        const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
-        renderer.beginStripTarget(buf + static_cast<size_t>(y) * gwBytes, y, rows);
-        renderer.clearScreen(0x00);
-        renderGrayscalePass();
-        renderer.endStripTarget();
-      }
+      renderer.beginStripTarget(buf, 0, gh);
+      renderer.clearScreen(0x00);
+      renderGrayscalePass();
+      renderer.endStripTarget();
     };
 
     // Tiered on heap pressure: two plane buffers hide both plane renders
