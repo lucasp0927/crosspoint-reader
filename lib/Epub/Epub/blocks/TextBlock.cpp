@@ -1,6 +1,7 @@
 #include "TextBlock.h"
 
 #include <BidiUtils.h>
+#include <CjkTypesetting.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -132,12 +133,92 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     LOG_ERR("TXB", "Render skipped: invalid block");
     return;
   }
+  const bool scanning = renderer.isFontCacheScanning();
+
+  // Decoration lines run parallel to the column (Taiwan convention: 專名號/
+  // underline along the LEFT side — which is also the below-baseline side of
+  // rotated Latin, so one rule serves both scripts). Tracked per style bit and
+  // merged across adjacent words so inter-word gaps stay decorated, mirroring
+  // the horizontal DecorationLineTracker.
+  const int pitch = renderer.verticalColumnPitch();
+  const int ascender = renderer.getFontAscenderSize(fontId);
+  const int descenderDepth = renderer.getFontDescenderDepth(fontId);
+  struct VerticalDecorationTracker {
+    EpdFontFamily::Style styleBit;
+    int x;
+    int startY = -1;
+    int endY = -1;
+    bool active() const { return startY != -1; }
+    void reset() {
+      startY = -1;
+      endY = -1;
+    }
+  };
+  VerticalDecorationTracker decorations[] = {
+      {EpdFontFamily::UNDERLINE, columnLeftX + cjkTypesetting::verticalUnderlineX(pitch, ascender, descenderDepth)},
+      {EpdFontFamily::STRIKETHROUGH, columnLeftX + cjkTypesetting::verticalStrikethroughX(pitch)},
+  };
+  const auto flushDecoration = [&](VerticalDecorationTracker& line) {
+    if (line.active()) {
+      renderer.drawLine(line.x, line.startY, line.x, line.endY, 2, true);
+      line.reset();
+    }
+  };
+
   for (uint16_t i = 0; i < numWords; i++) {
-    // Focus-split words carry a bold-prefix boundary; vertical mode ignores
-    // the split and draws the word in its base style (focus reading is a
-    // horizontal-only feature for now).
-    renderer.drawTextVertical(fontId, columnLeftX, topY + xposArr[i], wordText(i), true, wordStyle(i));
+    const char* word = wordText(i);
+    const int wordY = topY + xposArr[i];
+    const EpdFontFamily::Style currentStyle = wordStyle(i);
+    const uint8_t boundary = focusBoundary(i);
+
+    if (boundary > 0) {
+      // Focus split: bold prefix, then the regular tail at its pre-computed
+      // inline offset — which is a downward offset in a column. Same bounded
+      // buffer as the horizontal path (max 9 codepoints, 36 UTF-8 bytes).
+      char boldBuf[40];
+      const auto boldStyle = static_cast<EpdFontFamily::Style>(currentStyle | EpdFontFamily::BOLD);
+      const size_t boldLen =
+          std::min<size_t>({static_cast<size_t>(boundary), static_cast<size_t>(wordTextLen(i)), sizeof(boldBuf) - 1});
+      memcpy(boldBuf, word, boldLen);
+      boldBuf[boldLen] = '\0';
+      renderer.drawTextVertical(fontId, columnLeftX, wordY, boldBuf, true, boldStyle);
+      renderer.drawTextVertical(fontId, columnLeftX, wordY + focusSuffixXArr[i], word + boldLen, true, currentStyle);
+    } else {
+      renderer.drawTextVertical(fontId, columnLeftX, wordY, word, true, currentStyle);
+    }
+
+    if (scanning) {
+      continue;
+    }
+
+    for (auto& line : decorations) {
+      if (EpdFontFamily::hasTextDecoration(currentStyle) && (currentStyle & line.styleBit) != 0) {
+        int segStartY = wordY;
+        int segLength = renderer.getTextWidth(fontId, word, currentStyle);
+        if ((currentStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
+          segLength = (segLength + 1) / 2;
+        }
+        // Do not decorate the synthetic em-space used for paragraph indentation.
+        if (wordTextLen(i) >= 3 && static_cast<uint8_t>(word[0]) == 0xE2 && static_cast<uint8_t>(word[1]) == 0x80 &&
+            static_cast<uint8_t>(word[2]) == 0x83) {
+          const int emAdvance = renderer.getTextAdvanceX(fontId, "\xe2\x80\x83", currentStyle);
+          segStartY += emAdvance;
+          segLength -= emAdvance;
+          if (segLength < 0) segLength = 0;
+        }
+        if (!line.active()) {
+          line.startY = segStartY;
+        }
+        line.endY = segStartY + segLength;
+      } else {
+        flushDecoration(line);
+      }
+    }
   }
+  for (auto& line : decorations) {
+    flushDecoration(line);
+  }
+  // Still not drawn in vertical mode: ruby (needs right-of-column layout).
 }
 
 void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
