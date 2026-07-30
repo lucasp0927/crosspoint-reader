@@ -21,4 +21,8 @@ struct ReaderRenderSpec {
   bool embeddedStyle = true;
   uint8_t imageRendering = 0;
   bool focusReadingEnabled = false;
+  // Vertical CJK mode: columns read top-to-bottom, right-to-left. Layout runs
+  // in transposed space (inline extent = viewportHeight), so viewportWidth /
+  // viewportHeight above keep their screen meaning regardless of this flag.
+  bool verticalMode = false;
 };

@@ -298,7 +298,11 @@ static AlignedMemRect screenRectToAlignedMemRect(GfxRenderer::Orientation orient
   return out;
 }
 
-enum class TextRotation { None, Rotated90CW };
+// None: horizontal. Rotated90CW: string advances UP the screen, glyph tops
+// face left (side-button labels). Rotated90CWDown: string advances DOWN the
+// screen, glyph tops face right — the orientation of Latin runs and rotated
+// punctuation embedded in vertical CJK columns.
+enum class TextRotation { None, Rotated90CW, Rotated90CWDown };
 
 // Shared glyph rendering logic for normal and rotated text.
 // Coordinate mapping and cursor advance direction are selected at compile time via the template parameter.
@@ -402,6 +406,13 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     if (!renderer.glyphIntersectsStrip(ob, ib - (width - 1), ob + height - 1, ib)) {
       return;
     }
+  } else if constexpr (rotation == TextRotation::Rotated90CWDown) {
+    // screenX = cursorX + top - glyphY, screenY = cursorY + left + glyphX
+    const int x1 = cursorX + top;
+    const int y0 = cursorY + left;
+    if (!renderer.glyphIntersectsStrip(x1 - (height - 1), y0, x1, y0 + width - 1)) {
+      return;
+    }
   } else {
     const int gx0 = cursorX + left;
     const int gy0 = cursorY - top;
@@ -419,6 +430,9 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     if constexpr (rotation == TextRotation::Rotated90CW) {
       outerBase = cursorX + fontData->ascender - top;  // screenX = outerBase + glyphY
       innerBase = cursorY - left;                      // screenY = innerBase - glyphX
+    } else if constexpr (rotation == TextRotation::Rotated90CWDown) {
+      outerBase = cursorX + top;   // screenX = outerBase - glyphY (tops face right)
+      innerBase = cursorY + left;  // screenY = innerBase + glyphX (advance downward)
     } else {
       outerBase = cursorY - top;   // screenY = outerBase + glyphY
       innerBase = cursorX + left;  // screenX = innerBase + glyphX
@@ -433,6 +447,9 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           if constexpr (rotation == TextRotation::Rotated90CW) {
             screenX = outerCoord;
             screenY = innerBase - glyphX;
+          } else if constexpr (rotation == TextRotation::Rotated90CWDown) {
+            screenX = outerBase - glyphY;
+            screenY = innerBase + glyphX;
           } else {
             screenX = innerBase + glyphX;
             screenY = outerCoord;
@@ -468,6 +485,9 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           if constexpr (rotation == TextRotation::Rotated90CW) {
             screenX = outerCoord;
             screenY = innerBase - glyphX;
+          } else if constexpr (rotation == TextRotation::Rotated90CWDown) {
+            screenX = outerBase - glyphY;
+            screenY = innerBase + glyphX;
           } else {
             screenX = innerBase + glyphX;
             screenY = outerCoord;
@@ -2048,6 +2068,147 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
 
     renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, lastBaseY, black, style);
     prevCp = cp;
+  }
+}
+
+// Vertical presentation class for a codepoint in top-to-bottom flow. The
+// .cpfont format carries no OpenType `vert` substitutions, so vertical forms
+// are synthesized from the horizontal glyphs:
+//  - Rotate: scripts that read sideways in vertical text (Latin, digits) and
+//    wide punctuation whose glyph is drawn for horizontal flow (brackets,
+//    dashes, ellipsis, fullwidth tilde).
+//  - CenteredStop: ideographic stop/comma, whose ink sits bottom-left of the
+//    em box horizontally. Traditional Chinese (Taiwan) vertical typesetting
+//    centers them in the cell; Japanese/simplified style would instead place
+//    them top-right (a possible future setting).
+//  - Upright: everything else (Han, kana, fullwidth forms, ！？).
+enum class VerticalForm : uint8_t { Upright, Rotate, CenteredStop };
+
+static VerticalForm verticalFormFor(const uint32_t cp) {
+  if (cp < 0x2E80) return VerticalForm::Rotate;  // ASCII, Latin-1, general punctuation (– — … ‥)
+  switch (cp) {
+    case 0x3001:  // 、
+    case 0x3002:  // 。
+    case 0xFF0C:  // ，
+    case 0xFF0E:  // ．
+    case 0xFF61:  // ｡
+    case 0xFF64:  // ､
+      return VerticalForm::CenteredStop;
+    case 0x3008:  // 〈
+    case 0x3009:  // 〉
+    case 0x300A:  // 《
+    case 0x300B:  // 》
+    case 0x300C:  // 「
+    case 0x300D:  // 」
+    case 0x300E:  // 『
+    case 0x300F:  // 』
+    case 0x3010:  // 【
+    case 0x3011:  // 】
+    case 0x3014:  // 〔
+    case 0x3015:  // 〕
+    case 0x3016:  // 〖
+    case 0x3017:  // 〗
+    case 0x301C:  // 〜
+    case 0x30FC:  // ー (prolonged sound mark)
+    case 0xFF08:  // （
+    case 0xFF09:  // ）
+    case 0xFF0D:  // －
+    case 0xFF1D:  // ＝
+    case 0xFF3B:  // ［
+    case 0xFF3D:  // ］
+    case 0xFF5B:  // ｛
+    case 0xFF5D:  // ｝
+    case 0xFF5E:  // ～
+      return VerticalForm::Rotate;
+    default:
+      return VerticalForm::Upright;
+  }
+}
+
+void GfxRenderer::drawTextVertical(const int fontId, const int x, const int y, const char* text, const bool black,
+                                   const EpdFontFamily::Style style) const {
+  if (text == nullptr || *text == '\0') {
+    return;
+  }
+
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
+
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) {
+    fontCacheManager_->recordText(text, resolvedFontId, style);
+    return;
+  }
+
+  const auto fontIt = fontMap.find(resolvedFontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
+    return;
+  }
+  const auto& font = fontIt->second;
+  const EpdFontData* fontData = font.getData(style);
+  const int ascender = fontData->ascender;
+  // descender is stored FreeType-style (typically negative below baseline);
+  // normalize to a positive depth.
+  const int descenderDepth = fontData->descender < 0 ? -fontData->descender : fontData->descender;
+  const int pitch = vtextPitch_ > 0 ? vtextPitch_ : getLineHeight(resolvedFontId);
+
+  int cursorY = y;            // top of the current character cell
+  uint32_t prevRotCp = 0;     // kern context, valid only inside a rotated run
+  int32_t prevRotAdvFP = 0;   // 12.4 pending advance of the previous rotated glyph
+
+  const char* cursor = text;
+  uint32_t cp;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor)))) {
+    // v1: combining marks are dropped in vertical flow (CJK text carries none;
+    // stray Latin diacritics lose their mark rather than misplace it).
+    if (utf8IsCombiningMark(cp) || BidiUtils::isTransparentMark(cp)) {
+      continue;
+    }
+
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    if (!glyph) {
+      prevRotCp = 0;
+      prevRotAdvFP = 0;
+      continue;
+    }
+    const int advancePx = fp4::toPixel(glyph->advanceX);
+
+    if (verticalFormFor(cp) == VerticalForm::Rotate) {
+      // Rotated run: the Latin baseline runs down the column; kerning and
+      // differential rounding apply along y exactly as they would along x.
+      if (prevRotCp != 0) {
+        const auto kernFP = font.getKerning(prevRotCp, cp, style);
+        cursorY += fp4::toPixel(prevRotAdvFP + kernFP);
+      }
+      // Center the rotated em box on the column: ink spans
+      // [ox - descenderDepth, ox + ascender] horizontally.
+      const int ox = x + (pitch - (ascender + descenderDepth)) / 2 + descenderDepth;
+      renderCharImpl<TextRotation::Rotated90CWDown>(*this, renderMode, font, cp, ox, cursorY, black, style);
+      prevRotAdvFP = glyph->advanceX;
+      prevRotCp = cp;
+      continue;
+    }
+
+    // Leaving a rotated run: spend its pending advance before placing an
+    // upright cell.
+    if (prevRotCp != 0) {
+      cursorY += fp4::toPixel(prevRotAdvFP);
+      prevRotCp = 0;
+      prevRotAdvFP = 0;
+    }
+
+    // Upright cell: em box centered on the column, baseline ascender below
+    // the cell top — the same vertical metrics as a one-glyph horizontal line.
+    int penX = x + (pitch - advancePx) / 2;
+    int baselineY = cursorY + ascender;
+    if (verticalFormFor(cp) == VerticalForm::CenteredStop) {
+      // Center the ink in the (square) character cell, computed from the
+      // glyph's own metrics: horizontally the ink spans [left, left+width]
+      // from the pen, vertically [baseline-top, baseline-top+height].
+      penX += advancePx / 2 - glyph->left - glyph->width / 2;
+      baselineY += advancePx / 2 - ascender + glyph->top - glyph->height / 2;
+    }
+    renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, penX, baselineY, black, style);
+    cursorY += advancePx;
   }
 }
 

@@ -265,6 +265,13 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Toggle(StrId::STR_HYPHENATION, &CrossPointSettings::hyphenationEnabled, "hyphenationEnabled",
                             StrId::STR_CAT_READER)
             .withTextSettings(),
+        // NOT .withTextSettings(): TextSettingsActivity is a hardcoded 4-tab
+        // screen that ignores the flag, and flagged entries are excluded from
+        // the Settings → Reader tab — flagging would hide this everywhere on
+        // device. Reader tab is also where the sibling layout toggles
+        // (orientation, images) live.
+        SettingInfo::Toggle(StrId::STR_VERTICAL_TEXT, &CrossPointSettings::verticalReading, "verticalReading",
+                            StrId::STR_CAT_READER),
         SettingInfo::Enum(
             StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
             {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW},

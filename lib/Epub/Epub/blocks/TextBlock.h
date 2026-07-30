@@ -92,6 +92,11 @@ class TextBlock final : public Block {
   const std::vector<std::string>& getRubyTexts() const { return rubyTexts; }
 
   void render(const GfxRenderer& renderer, int fontId, int x, int y) const;
+  // Vertical-mode render: this line becomes one column. columnLeftX is the
+  // column cell's left edge (renderer.verticalColumnPitch() wide), topY the
+  // inline start; word xpos values become downward offsets. v1 limitations:
+  // ruby, focus-split bolding, and underline/strike decorations are not drawn.
+  void renderVertical(const GfxRenderer& renderer, int fontId, int columnLeftX, int topY) const;
   BlockType getType() override { return TEXT_BLOCK; }
   bool serialize(HalFile& file) const;
   static std::unique_ptr<TextBlock> deserialize(HalFile& file);
