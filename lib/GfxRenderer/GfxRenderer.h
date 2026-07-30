@@ -263,6 +263,10 @@ class GfxRenderer {
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   int getFontAscenderSize(int fontId) const;
+  // Positive depth below the baseline (descender is stored FreeType-style,
+  // typically negative). Used with the ascender to center rotated glyphs and
+  // place decoration lines in vertical text.
+  int getFontDescenderDepth(int fontId) const;
   int getLineHeight(int fontId) const;
   int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
