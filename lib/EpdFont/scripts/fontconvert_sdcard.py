@@ -566,8 +566,12 @@ def extract_ligatures_fonttools(font_path, codepoints):
 
 
 def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=False,
-                         fallback_fontfile=None):
-    """Rasterize all glyphs for one font style. Returns StyleRasterData."""
+                         fallback_fontfile=None, sparse_intervals=False):
+    """Rasterize all glyphs for one font style. Returns StyleRasterData.
+
+    sparse_intervals: keep the caller's intervals verbatim instead of splitting
+    them around undrawable codepoints. See the validation block below.
+    """
     import freetype
 
     style_names = {0: "regular", 1: "bold", 2: "italic", 3: "bolditalic"}
@@ -607,23 +611,46 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
     # Only check glyph existence via get_char_index — do NOT call
     # load_glyph here, as that triggers FT_LOAD_RENDER at the target
     # DPI and doubles total rasterization time for no benefit.
-    print(f"  [{style_label}] Validating intervals against font...", file=sys.stderr)
-    validated_intervals = []
-    for i_start, i_end in intervals:
-        start = i_start
-        for code_point in range(i_start, i_end + 1):
-            has_primary = face.get_char_index(code_point) != 0 or code_point in ligature_glyph_indices
-            has_fallback = fallback_face and fallback_face.get_char_index(code_point) != 0
-            if not has_primary and not has_fallback:
-                if start < code_point:
-                    validated_intervals.append((start, code_point - 1))
-                start = code_point + 1
-        if start <= i_end:
-            validated_intervals.append((start, i_end))
+    #
+    # Splitting is the default because an undrawable codepoint would otherwise
+    # occupy a real glyph slot. The cost is interval count, and the interval
+    # table is the ONLY part of a .cpfont that stays resident in RAM
+    # (SdCardFont::load allocates it per style; glyph metadata and bitmaps page
+    # in from SD). For a CJK font the requested codepoints are scattered across
+    # U+4E00-U+9FFF, so splitting around every hole produces thousands of
+    # intervals — tens of KB of permanent heap on a 380KB device.
+    #
+    # --sparse-intervals trades that for file size: intervals are kept verbatim,
+    # and each undrawable codepoint becomes a zero-size glyph via the
+    # `f is None` path in the rasterize loop below (0x0 px, advance 0, no bitmap
+    # bytes — 16B of on-SD metadata and nothing resident). The caller is then
+    # free to merge across holes, collapsing the table to a handful of entries.
+    #
+    # Trade-off: a codepoint inside a merged range that no font can draw is
+    # reported as covered and renders as nothing, instead of missing coverage
+    # and rendering as the replacement glyph. Opt-in for that reason.
+    if sparse_intervals:
+        total_glyphs = sum(end - start + 1 for start, end in intervals)
+        print(f"  [{style_label}] Sparse mode: keeping {len(intervals)} intervals verbatim, "
+              f"{total_glyphs} glyphs (undrawable ones become blank)", file=sys.stderr)
+    else:
+        print(f"  [{style_label}] Validating intervals against font...", file=sys.stderr)
+        validated_intervals = []
+        for i_start, i_end in intervals:
+            start = i_start
+            for code_point in range(i_start, i_end + 1):
+                has_primary = face.get_char_index(code_point) != 0 or code_point in ligature_glyph_indices
+                has_fallback = fallback_face and fallback_face.get_char_index(code_point) != 0
+                if not has_primary and not has_fallback:
+                    if start < code_point:
+                        validated_intervals.append((start, code_point - 1))
+                    start = code_point + 1
+            if start <= i_end:
+                validated_intervals.append((start, i_end))
 
-    intervals = validated_intervals
-    total_glyphs = sum(end - start + 1 for start, end in intervals)
-    print(f"  [{style_label}] Validated: {len(intervals)} intervals, {total_glyphs} glyphs", file=sys.stderr)
+        intervals = validated_intervals
+        total_glyphs = sum(end - start + 1 for start, end in intervals)
+        print(f"  [{style_label}] Validated: {len(intervals)} intervals, {total_glyphs} glyphs", file=sys.stderr)
 
     # Rasterize all glyphs
     total_bitmap_size = 0
@@ -825,11 +852,14 @@ def style_sections_total_size(sections):
 # --- File writers ---
 
 def generate_cpfont_multistyle(style_fonts, size, intervals, output_path,
-                               force_autohint=False, fallback_style_fonts=None):
+                               force_autohint=False, fallback_style_fonts=None,
+                               sparse_intervals=False):
     """Generate a multi-style v4 .cpfont file.
 
     style_fonts: dict of {style_id: fontfile_path} e.g. {0: "Regular.ttf", 2: "Italic.ttf"}
     fallback_style_fonts: optional dict of {style_id: fallback_fontfile_path}
+    sparse_intervals: keep intervals verbatim; undrawable codepoints become
+        blank glyphs (see rasterize_font_style)
     """
     MAGIC = b"CPFONT\x00\x00"
     HEADER_SIZE = 32
@@ -847,7 +877,8 @@ def generate_cpfont_multistyle(style_fonts, size, intervals, output_path,
         raster_data[style_id] = rasterize_font_style(
             fontfile, size, intervals, style_id=style_id,
             force_autohint=force_autohint,
-            fallback_fontfile=fallback_fontfile)
+            fallback_fontfile=fallback_fontfile,
+            sparse_intervals=sparse_intervals)
 
     # Pack binary sections for each style
     packed_sections = {}  # style_id -> tuple of section bytearrays
@@ -931,6 +962,13 @@ def main():
                         help="Path to the font file (single-style mode).")
     parser.add_argument("--intervals", dest="intervals",
                         help="Comma-separated interval presets (e.g., 'latin-ext,greek,cyrillic').")
+    parser.add_argument("--sparse-intervals", dest="sparse_intervals", action="store_true",
+                        help="Keep --intervals verbatim instead of splitting them around "
+                             "codepoints no font can draw; those become blank glyphs. Lets a "
+                             "caller merge across holes to shrink the interval table, which is "
+                             "the only part of a .cpfont resident in RAM. Costs on-SD glyph "
+                             "metadata and makes undrawable codepoints render blank instead of "
+                             "as the replacement glyph.")
     parser.add_argument("--size", type=int, dest="size",
                         help="Single font size to generate.")
     parser.add_argument("--sizes", dest="sizes",
@@ -1065,7 +1103,8 @@ def main():
         total_size += generate_cpfont_multistyle(
             style_fonts, sz, intervals, output_path,
             force_autohint=args.force_autohint,
-            fallback_style_fonts=fallback_style_fonts)
+            fallback_style_fonts=fallback_style_fonts,
+            sparse_intervals=args.sparse_intervals)
     print(f"\nTotal: {len(sizes)} files, {total_size / 1024 / 1024:.2f} MB", file=sys.stderr)
 
 

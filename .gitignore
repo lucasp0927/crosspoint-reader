@@ -25,6 +25,13 @@ lib/EpdFont/scripts/output/
 # (worktrees, scheduled-task locks, settings.local, scout CLEANUP.md) out.
 .claude/*
 !.claude/skills/
+# Local font-build workspace: the scripts and interval lists under fonts/ are
+# tracked, the inputs and outputs are not. Source TTFs are third-party
+# redistributables (~190MB) and .cpfont outputs are already ignored above.
+fonts/**/*.ttf
+fonts/**/*.zip
+# Serial capture output (log/capture.py itself is tracked)
+log/*.txt
 /managed_components
 /.dummy
 /CMakeLists.txt
