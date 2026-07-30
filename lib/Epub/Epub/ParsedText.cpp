@@ -1,6 +1,7 @@
 #include "ParsedText.h"
 
 #include <BidiUtils.h>
+#include <CjkTypesetting.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Utf8.h>
@@ -62,72 +63,6 @@ uint32_t lastCodepoint(const std::string& word) {
 
 bool containsSoftHyphen(const std::string& word) { return word.find(SOFT_HYPHEN_UTF8) != std::string::npos; }
 
-bool isNoBreakBeforeCjkPunctuation(const uint32_t cp) {
-  switch (cp) {
-    case '.':
-    case ',':
-    case ':':
-    case ';':
-    case '!':
-    case '?':
-    case ')':
-    case ']':
-    case '}':
-    case 0x00BB:  // »
-    case 0x2019:  // ’
-    case 0x201D:  // ”
-    case 0x3001:  // 、
-    case 0x3002:  // 。
-    case 0x3009:  // 〉
-    case 0x300B:  // 》
-    case 0x300D:  // 」
-    case 0x300F:  // 』
-    case 0x3011:  // 】
-    case 0x3015:  // 〕
-    case 0x3017:  // 〗
-    case 0x3019:  // 〙
-    case 0x301B:  // 〛
-    case 0xFF01:  // ！
-    case 0xFF09:  // ）
-    case 0xFF0C:  // ，
-    case 0xFF0E:  // ．
-    case 0xFF1A:  // ：
-    case 0xFF1B:  // ；
-    case 0xFF1F:  // ？
-    case 0xFF3D:  // ］
-    case 0xFF5D:  // ｝
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool isNoBreakAfterCjkPunctuation(const uint32_t cp) {
-  switch (cp) {
-    case '(':
-    case '[':
-    case '{':
-    case 0x00AB:  // «
-    case 0x2018:  // ‘
-    case 0x201C:  // “
-    case 0x3008:  // 〈
-    case 0x300A:  // 《
-    case 0x300C:  // 「
-    case 0x300E:  // 『
-    case 0x3010:  // 【
-    case 0x3014:  // 〔
-    case 0x3016:  // 〖
-    case 0x3018:  // 〘
-    case 0x301A:  // 〚
-    case 0xFF08:  // （
-    case 0xFF3B:  // ［
-    case 0xFF5B:  // ｛
-      return true;
-    default:
-      return false;
-  }
-}
-
 bool containsCjkBreakableCodepoint(const std::string& text) {
   const auto* ptr = reinterpret_cast<const unsigned char*>(text.c_str());
   while (*ptr) {
@@ -152,7 +87,10 @@ uint32_t countCodepoints(const std::string_view text) {
 
 bool hasCjkBreakOpportunityBetween(const uint32_t leftCp, const uint32_t rightCp) {
   if (!utf8IsCjkBreakable(leftCp) && !utf8IsCjkBreakable(rightCp)) return false;
-  if (isNoBreakAfterCjkPunctuation(leftCp) || isNoBreakBeforeCjkPunctuation(rightCp)) return false;
+  // 行尾/行首禁則 (kinsoku): the shared rule tables in CjkTypesetting.h keep
+  // openers off line ends and closers/points/dashes off line starts, for
+  // horizontal lines and vertical columns alike.
+  if (cjkTypesetting::isForbiddenLineEnd(leftCp) || cjkTypesetting::isForbiddenLineStart(rightCp)) return false;
   if (utf8IsCombiningMark(rightCp)) return false;
   return true;
 }
@@ -999,6 +937,17 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
         continue;
       }
 
+      // 行首/行尾禁則 (kinsoku) at gap breaks: the CJK tokenizer already
+      // refuses these boundaries inside a run, but a forbidden-start token can
+      // arrive as its own word (—— split out by markup, source-whitespace-
+      // separated punctuation), and those gaps reach the DP directly. Skipping
+      // the candidate here covers that path; the oversized-word fallback below
+      // still guarantees progress when no legal break exists at all.
+      if (j + 1 < totalWordCount && (cjkTypesetting::isForbiddenLineStart(firstCodepoint(words[j + 1])) ||
+                                     cjkTypesetting::isForbiddenLineEnd(lastCodepoint(words[j])))) {
+        continue;
+      }
+
       const int extraEndOffset = calculateRubyExtraEndOffset(i, j + 1, renderer, fontId);
 
       if (currlen + extraEndOffset > effectivePageWidth) {
@@ -1123,9 +1072,15 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
     }
 
     // Don't break before a continuation word (e.g., orphaned "?" after "question").
-    // Backtrack to the start of the continuation group so the whole group moves to the next line.
+    // Backtrack to the start of the continuation group so the whole group moves to
+    // the next line. Also honor 行首/行尾禁則 (kinsoku, CjkTypesetting.h) here:
+    // step back while the break would start the next line with a forbidden
+    // character or end this line with an opener. Bounded at lineStart + 1 so a
+    // line always keeps at least one word.
     while (currentIndex > lineStart + 1 && currentIndex < wordWidths.size() &&
-           !TokenBoundary::allowsBreak(continuesVec[currentIndex], noSpaceBeforeVec[currentIndex])) {
+           (!TokenBoundary::allowsBreak(continuesVec[currentIndex], noSpaceBeforeVec[currentIndex]) ||
+            cjkTypesetting::isForbiddenLineStart(firstCodepoint(words[currentIndex])) ||
+            cjkTypesetting::isForbiddenLineEnd(lastCodepoint(words[currentIndex - 1])))) {
       --currentIndex;
     }
 

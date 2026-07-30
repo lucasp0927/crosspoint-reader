@@ -49,7 +49,10 @@ namespace {
 // v45: Internal EPUB links preserve CSS superscript/subscript positioning.
 // v46: header gains spec.verticalMode (vertical CJK layout runs in transposed
 //      space, so its cached pages are incompatible with horizontal ones).
-constexpr uint8_t SECTION_FILE_VERSION = 46;
+// v47: kinsoku sets extended per clreq (— … ‥ ～ interpuncts, unit suffixes
+//      added to 行首禁則), moving CJK break opportunities — cached line breaks
+//      from v46 no longer match.
+constexpr uint8_t SECTION_FILE_VERSION = 47;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
