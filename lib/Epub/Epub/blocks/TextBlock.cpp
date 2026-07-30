@@ -126,6 +126,20 @@ bool TextBlock::hasRuby() const {
   return false;
 }
 
+void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, const int columnLeftX,
+                               const int topY) const {
+  if (!isValid) {
+    LOG_ERR("TXB", "Render skipped: invalid block");
+    return;
+  }
+  for (uint16_t i = 0; i < numWords; i++) {
+    // Focus-split words carry a bold-prefix boundary; vertical mode ignores
+    // the split and draws the word in its base style (focus reading is a
+    // horizontal-only feature for now).
+    renderer.drawTextVertical(fontId, columnLeftX, topY + xposArr[i], wordText(i), true, wordStyle(i));
+  }
+}
+
 void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
   if (!isValid) {
     LOG_ERR("TXB", "Render skipped: invalid block");

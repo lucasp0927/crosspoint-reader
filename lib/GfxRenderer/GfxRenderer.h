@@ -107,6 +107,10 @@ class GfxRenderer {
   // re-drawing resident glyphs is a RAM-only subset check. No-op for built-in
   // fonts.
   void ensureSdGlyphsResident(int fontId, const char* text, EpdFontFamily::Style style, bool metadataOnly) const;
+  // Vertical text page state; see setVerticalText().
+  bool vtextActive_ = false;
+  int vtextBlockExtent_ = 0;
+  int vtextPitch_ = 0;
 
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
                   EpdFontFamily::Style style) const;
@@ -312,6 +316,31 @@ class GfxRenderer {
   void drawTextRotated90CW(int fontId, int x, int y, const char* text, bool black = true,
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getTextHeight(int fontId) const;
+
+  // --- Vertical CJK text (columns top-to-bottom, right-to-left) ---
+  // Page-level render state, set by the reader before rendering a vertical
+  // page and cleared after. blockExtent is the laid-out block size
+  // (spec.viewportWidth): PageLine block offsets grow leftward from the right
+  // edge. columnPitch is the layout line pitch (getLineHeight * compression),
+  // i.e. the column width.
+  void setVerticalText(const bool active, const int blockExtent = 0, const int columnPitch = 0) {
+    vtextActive_ = active;
+    vtextBlockExtent_ = blockExtent;
+    vtextPitch_ = columnPitch;
+  }
+  bool verticalTextActive() const { return vtextActive_; }
+  int verticalBlockExtent() const { return vtextBlockExtent_; }
+  int verticalColumnPitch() const { return vtextPitch_; }
+
+  // Draw one text run as a segment of a vertical column. x = left edge of the
+  // column cell (columnPitch wide), y = top of the first character cell;
+  // advances downward. Han/kana render upright; Latin runs and wide
+  // punctuation rotate 90CW (tops face right); ideographic stops/commas take
+  // their vertical form (top-right of the cell). The advance spent downward
+  // per glyph equals its horizontal advance, so runs measured with
+  // getTextWidth lay out correctly down a column.
+  void drawTextVertical(int fontId, int x, int y, const char* text, bool black = true,
+                        EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
 
   // Grayscale functions
   void setRenderMode(const RenderMode mode) { this->renderMode = mode; }

@@ -299,6 +299,13 @@ void EpubReaderActivity::openDictionaryWordSelect() {
     requestUpdate();
     return;
   }
+  // Word-select geometry (tap boxes, row navigation) assumes horizontal lines;
+  // vertical pages would highlight the wrong regions. Disabled until the
+  // selector learns column geometry.
+  if (SETTINGS.verticalReading != 0) {
+    LOG_INF("ERS", "Dictionary word select unavailable in vertical text mode");
+    return;
+  }
   if (!section) return;
   auto page = section->loadPage(section->currentPage);
   if (!page) return;
@@ -1146,6 +1153,12 @@ void EpubReaderActivity::renderBook() {
   buildViewportHeight = viewportHeight;
 
   const ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+
+  // Vertical CJK pages: PageLine/TextBlock map the transposed layout back to
+  // screen space through this renderer state. Idempotent, so setting it on
+  // every render also picks up a toggle made in text settings mid-book.
+  renderer.setVerticalText(renderSpec.verticalMode, renderSpec.viewportWidth,
+                           renderer.getLineHeight(renderSpec.fontId, renderSpec.lineCompression));
 
   if (!section) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;

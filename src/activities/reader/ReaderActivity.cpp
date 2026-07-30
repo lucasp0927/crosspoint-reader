@@ -73,6 +73,8 @@ void ReaderActivity::onExit() {
   Activity::onExit();
 
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  // Vertical text state is reader-scoped; the rest of the UI renders horizontally.
+  renderer.setVerticalText(false);
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
 

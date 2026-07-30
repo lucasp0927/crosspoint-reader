@@ -21,6 +21,15 @@ void renderFilteredPageElements(const std::vector<std::shared_ptr<PageElement>>&
 }  // namespace
 
 void PageLine::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
+  if (renderer.verticalTextActive()) {
+    // Vertical page: layout ran in transposed space, so yPos is the block
+    // offset (grows right-to-left from the page's right edge) and xPos is the
+    // inline inset (grows downward). xOffset/yOffset remain the screen margins.
+    const int pitch = renderer.verticalColumnPitch();
+    const int columnLeftX = xOffset + renderer.verticalBlockExtent() - yPos - pitch;
+    block->renderVertical(renderer, fontId, columnLeftX, yOffset + xPos);
+    return;
+  }
   block->render(renderer, fontId, xPos + xOffset, yPos + yOffset);
 }
 
