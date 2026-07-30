@@ -1,5 +1,7 @@
 #include "SdCardFontManager.h"
 
+#include "FlashReaderFont.h"
+
 #include <EpdFontFamily.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
@@ -49,12 +51,33 @@ int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* fami
     delete font;
     return 0;
   }
-  renderer.registerSdCardFont(fontId, font);
+  // Flash-backed hybrid: when this size matches the compiled-in glyphs, the
+  // reader uses the flash font and this SD font serves only the tail, per glyph
+  // (see FlashReaderFont). Deliberately NOT registered in the renderer's SD
+  // font map in that case — registration would route both prewarm and the
+  // measurement fast path (GfxRenderer.cpp:89) through the SD font, bypassing
+  // the flash glyph table and re-paying the SD reads this exists to avoid.
+  EpdFont* styles[SdCardFont::MAX_STYLES];
+  for (uint8_t s = 0; s < SdCardFont::MAX_STYLES; s++) styles[s] = font->getEpdFont(s);
+
+  uint8_t hybridStyles = 0;
+  if (file.pointSize == FlashReaderFont::pointSize()) {
+    for (uint8_t s = 0; s < SdCardFont::MAX_STYLES; s++) {
+      if (EpdFont* flash = FlashReaderFont::bind(*font, s)) {
+        styles[s] = flash;
+        hybridStyles++;
+      }
+    }
+  }
+  if (hybridStyles == 0) {
+    renderer.registerSdCardFont(fontId, font);
+  }
   loaded_.push_back({font, fontId, file.pointSize});
 
-  LOG_DBG("SDMGR", "Loaded %s size=%u id=%d styles=%u", file.path.c_str(), file.pointSize, fontId, font->styleCount());
+  LOG_DBG("SDMGR", "Loaded %s size=%u id=%d styles=%u%s", file.path.c_str(), file.pointSize, fontId,
+          font->styleCount(), hybridStyles ? " (flash hybrid)" : "");
 
-  EpdFontFamily fontFamily(font->getEpdFont(0), font->getEpdFont(1), font->getEpdFont(2), font->getEpdFont(3));
+  EpdFontFamily fontFamily(styles[0], styles[1], styles[2], styles[3]);
   renderer.insertFont(fontId, fontFamily);
   return fontId;
 }
@@ -95,6 +118,9 @@ int SdCardFontManager::loadFamilyExtraSize(const SdCardFontFamilyInfo& family, G
 }
 
 void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
+  // Drop the flash-hybrid bindings first: they hold glyphMissCtx pointers into
+  // the SdCardFont instances deleted below.
+  FlashReaderFont::reset();
   // Drop UI CJK fallbacks before the SD fonts they point at are freed.
   renderer.clearFallbackFonts();
   renderer.clearSdCardFonts();

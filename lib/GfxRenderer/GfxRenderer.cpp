@@ -2041,8 +2041,15 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       }
       int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
       if (advFP == 0 && !utf8IsCombiningMark(cp)) {
-        const EpdGlyph* glyph = font.getGlyph(cp, style);
-        advFP = glyph ? glyph->advanceX : 0;
+        // Measurement only needs advanceX. Read just the glyph metadata rather
+        // than going through getGlyph(), which also pulls the bitmap off SD and
+        // consumes an overflow slot. On a CJK book the advance table cannot
+        // hold every character, so this path is hot during pagination.
+        advFP = sdIt->second->fetchAdvanceFromSd(cp, styleIdx);
+        if (advFP == 0) {  // not covered — let getGlyph apply its replacement logic
+          const EpdGlyph* glyph = font.getGlyph(cp, style);
+          advFP = glyph ? glyph->advanceX : 0;
+        }
       }
       widthFP += isSupSub ? (advFP + 1) / 2 : advFP;
     }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <HalStorage.h>
+
 #include <cstdint>
 #include <deque>
 #include <string>
@@ -78,6 +80,18 @@ class SdCardFont {
   // Returns the 12.4 fixed-point advance, or 0 if not found.
   uint16_t getAdvance(uint32_t codepoint, uint8_t style) const;
 
+  // Read advanceX for one codepoint straight from SD: 16 bytes of glyph
+  // metadata, no bitmap, no overflow slot consumed. Returns 0 if the font does
+  // not cover the codepoint.
+  //
+  // For the measurement path when getAdvance() misses. The advance table holds
+  // ADVANCE_CACHE_LIMIT entries and a Traditional Chinese novel uses ~3100
+  // distinct characters, so on a CJK book roughly a fifth of measured
+  // characters miss. Those misses used to fall through to getGlyph(), which
+  // reads the bitmap too and evicts a render glyph from the overflow ring — on
+  // a real 300-page span that was 1945KB read to obtain 28KB of advances.
+  uint16_t fetchAdvanceFromSd(uint32_t codepoint, uint8_t style);
+
   // Returns true if advance table is populated for at least one style.
   bool hasAdvanceTable() const;
 
@@ -115,6 +129,16 @@ class SdCardFont {
 
   // Number of styles present in this font file.
   uint8_t styleCount() const { return styleCount_; }
+
+  // Point `data` at this font's on-demand glyph loader and coverage index, so a
+  // font that keeps its common glyphs elsewhere (e.g. compiled into flash — see
+  // FlashReaderFont) can use this one as its per-glyph tail. `data` must outlive
+  // neither this font nor the styles it names.
+  //
+  // Sets exactly the three fields EpdFont::getGlyph() and
+  // EpdFont::hasCodepoint() consult on a miss; the caller's own bitmap, glyph
+  // and interval pointers are left alone.
+  bool attachAsGlyphTail(EpdFontData& data, uint8_t style);
 
   // Returns true if the glyph pointer points into the overflow buffer.
   bool isOverflowGlyph(const EpdGlyph* glyph) const;
@@ -273,8 +297,29 @@ class SdCardFont {
   };
   OverflowContext overflowCtx_[MAX_STYLES] = {};
 
-  // Shared on-demand overflow buffer (ring buffer of glyphs loaded via glyphMissHandler)
-  static constexpr uint32_t OVERFLOW_CAPACITY = 8;
+  // Shared on-demand overflow buffer (ring buffer of glyphs loaded via
+  // glyphMissHandler).
+  //
+  // Sized to hold one UI list row. UI text is never prewarmed (no activity
+  // outside the reader/dictionary opens a PrewarmScope), so every CJK glyph in
+  // a book list comes through here. The cost is not the measure+draw pair but
+  // the ellipsis truncation in GfxRenderer.cpp:1606, which re-measures a
+  // shrinking string in a loop — O(n^2) lookups for any row long enough to need
+  // truncating. At capacity 8 a 20-character title took 312 reads for 20
+  // distinct glyphs (7.8x ideal); a ring that holds the row collapses that to
+  // one read pair per glyph.
+  //
+  // Cost is bounded and measured: an entry is 28B on 32-bit plus one bitmap,
+  // which for CJK averages 59/92/131B at the 8/10/12pt UI fallback sizes, so
+  // ~8.6KB if all three UI instances fill their rings. The reader clears its
+  // ring every render scope via clearCache(); the UI path does not, so treat
+  // this as resident there.
+  //
+  // 24 is the knee of the curve, not a round number: a 20-character title costs
+  // 40 reads at 24 or 32 (the ideal — one read pair per distinct glyph) but 180
+  // at 16, because the truncation loop no longer fits. Dropping to 16 would
+  // return 2.9KB and give back 4.5x on the hottest UI path.
+  static constexpr uint32_t OVERFLOW_CAPACITY = 24;
   struct OverflowEntry {
     EpdGlyph glyph;
     uint8_t* bitmap = nullptr;
@@ -284,6 +329,17 @@ class SdCardFont {
   OverflowEntry overflow_[OVERFLOW_CAPACITY] = {};
   uint32_t overflowCount_ = 0;
   uint32_t overflowNext_ = 0;
+
+  // Persistent handle for the overflow path. onGlyphMiss used to open the
+  // .cpfont per glyph, which dominates unprewarmed rendering: UI text is never
+  // prewarmed (no activity outside the reader/dictionary opens a PrewarmScope),
+  // so a book list paid one SD open per CJK character, twice over, because
+  // measuring and drawing each walk the string. Reopened lazily and dropped in
+  // freeAll(); any I/O error closes it so the next miss starts clean.
+  HalFile overflowFile_;
+  bool overflowFileOpen_ = false;
+  bool ensureOverflowFile();
+  void closeOverflowFile();
 
   // Compact advance-only table for layout measurement (per-style).
   // Built by buildAdvanceTable(), queried by getAdvance().

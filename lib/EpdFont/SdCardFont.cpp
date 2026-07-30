@@ -199,6 +199,7 @@ void SdCardFont::releaseResidentCaches() {
 }
 
 void SdCardFont::freeAll() {
+  closeOverflowFile();
   clearOverflow();
   clearPersistentCache();
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
@@ -207,6 +208,39 @@ void SdCardFont::freeAll() {
   styleCount_ = 0;
   contentHash_ = 0;
   loaded_ = false;
+}
+
+uint16_t SdCardFont::fetchAdvanceFromSd(const uint32_t codepoint, const uint8_t styleIdx) {
+  if (!loaded_ || styleIdx >= MAX_STYLES || !styles_[styleIdx].present) return 0;
+  const auto& s = styles_[styleIdx];
+  const int32_t globalIdx = findGlobalGlyphIndex(s, codepoint);
+  if (globalIdx < 0) return 0;
+
+  // Shares the cached handle with the overflow path; nothing here disturbs the
+  // ring, so measurement misses no longer evict glyphs the renderer needs.
+  if (!ensureOverflowFile()) return 0;
+  EpdGlyph glyph = {};
+  const uint32_t off = s.glyphsFileOffset + static_cast<uint32_t>(globalIdx) * sizeof(EpdGlyph);
+  if (!overflowFile_.seekSet(off) ||
+      overflowFile_.read(reinterpret_cast<uint8_t*>(&glyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
+    LOG_ERR("SDCF", "fetchAdvanceFromSd: read failed for U+%04X style %u", codepoint, styleIdx);
+    closeOverflowFile();
+    return 0;
+  }
+  return glyph.advanceX;
+}
+
+bool SdCardFont::ensureOverflowFile() {
+  if (overflowFileOpen_) return true;
+  if (!Storage.openFileForRead("SDCF", filePath_, overflowFile_)) return false;
+  overflowFileOpen_ = true;
+  return true;
+}
+
+void SdCardFont::closeOverflowFile() {
+  if (!overflowFileOpen_) return;
+  overflowFile_.close();
+  overflowFileOpen_ = false;
 }
 
 void SdCardFont::clearOverflow() {
@@ -492,6 +526,19 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
 }
 
 // --- Glyph miss callback ---
+
+bool SdCardFont::attachAsGlyphTail(EpdFontData& data, const uint8_t style) {
+  if (!loaded_) return false;
+  const uint8_t styleIdx = resolveStyle(style);
+  if (styleIdx >= MAX_STYLES || !styles_[styleIdx].present) return false;
+
+  overflowCtx_[styleIdx].self = this;
+  overflowCtx_[styleIdx].styleIdx = styleIdx;
+  data.glyphMissHandler = &SdCardFont::onGlyphMiss;
+  data.glyphMissCtx = &overflowCtx_[styleIdx];
+  data.coverageHandler = &SdCardFont::onCoverageQuery;
+  return true;
+}
 
 void SdCardFont::applyGlyphMissCallback(uint8_t styleIdx) {
   overflowCtx_[styleIdx].self = this;
@@ -1616,22 +1663,24 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   uint32_t slot = self->overflowNext_;
   bool wasAtCapacity = (self->overflowCount_ == OVERFLOW_CAPACITY);
 
-  // Read glyph metadata into temporary
-  HalFile file;
-  if (!Storage.openFileForRead("SDCF", self->filePath_, file)) {
+  // Read glyph metadata into temporary. The handle is cached across misses —
+  // reopening per glyph was the dominant cost of unprewarmed (UI) rendering.
+  if (!self->ensureOverflowFile()) {
     LOG_ERR("SDCF", "Overflow: failed to open .cpfont");
     return nullptr;
   }
+  HalFile& file = self->overflowFile_;
 
   EpdGlyph tempGlyph = {};
   uint32_t glyphFileOff = s.glyphsFileOffset + static_cast<uint32_t>(globalIdx) * sizeof(EpdGlyph);
   if (!file.seekSet(glyphFileOff)) {
     LOG_ERR("SDCF", "Overflow: failed to seek to glyph for U+%04X style %u", codepoint, styleIdx);
-    file.close();
+    self->closeOverflowFile();
     return nullptr;
   }
   if (file.read(reinterpret_cast<uint8_t*>(&tempGlyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
     LOG_ERR("SDCF", "Overflow: failed to read glyph metadata for U+%04X style %u", codepoint, styleIdx);
+    self->closeOverflowFile();
     return nullptr;
   }
 
@@ -1646,12 +1695,13 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
     if (!file.seekSet(s.bitmapFileOffset + tempGlyph.dataOffset)) {
       LOG_ERR("SDCF", "Overflow: failed to seek to bitmap for U+%04X", codepoint);
       delete[] tempBitmap;
-      file.close();
+      self->closeOverflowFile();
       return nullptr;
     }
     if (file.read(tempBitmap, tempGlyph.dataLength) != static_cast<int>(tempGlyph.dataLength)) {
       LOG_ERR("SDCF", "Overflow: failed to read bitmap for U+%04X", codepoint);
       delete[] tempBitmap;
+      self->closeOverflowFile();
       return nullptr;
     }
   }
