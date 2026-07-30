@@ -34,7 +34,10 @@ namespace {
 // v36: Ruby justification and CJK short-line handling changed line breaking.
 // v37: header gains spec.verticalMode (vertical CJK layout runs in transposed
 //      space, so its cached pages are incompatible with horizontal ones).
-constexpr uint8_t SECTION_FILE_VERSION = 37;
+// v38: kinsoku sets extended per clreq (— … ‥ ～ interpuncts, unit suffixes
+//      added to 行首禁則), moving CJK break opportunities — cached line breaks
+//      from v37 no longer match.
+constexpr uint8_t SECTION_FILE_VERSION = 38;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
