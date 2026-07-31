@@ -53,6 +53,9 @@ class PageImage final : public PageElement {
       : PageElement(xPos, yPos), imageBlock(std::move(block)) {}
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) override;
   void renderPlaceholder(GfxRenderer& renderer, int xOffset, int yOffset) const;
+  // Maps this image's transposed layout position to screen space in vertical
+  // mode; see the definition in Page.cpp.
+  void verticalScreenPos(const GfxRenderer& renderer, int xOffset, int yOffset, int& outX, int& outY) const;
   bool serialize(HalFile& file) override;
   PageElementTag getTag() const override { return TAG_PageImage; }
   static std::unique_ptr<PageImage> deserialize(HalFile& file);

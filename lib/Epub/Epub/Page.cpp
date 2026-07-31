@@ -61,12 +61,34 @@ std::unique_ptr<PageLine> PageLine::deserialize(HalFile& file) {
   return std::unique_ptr<PageLine>(line);
 }
 
+// Screen position of an image laid out in transposed (vertical) space. The
+// image itself is never rotated: xPos is its inline offset (down the screen)
+// and yPos its block offset (right-to-left from the page's right edge), where
+// it occupies its own width of block extent. See PageLine::render.
+void PageImage::verticalScreenPos(const GfxRenderer& renderer, const int xOffset, const int yOffset, int& outX,
+                                  int& outY) const {
+  outX = xOffset + renderer.verticalBlockExtent() - yPos - imageBlock->getWidth();
+  outY = yOffset + xPos;
+}
+
 void PageImage::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
   // Images don't use fontId or text rendering
+  if (renderer.verticalTextActive()) {
+    int x, y;
+    verticalScreenPos(renderer, xOffset, yOffset, x, y);
+    imageBlock->render(renderer, x, y);
+    return;
+  }
   imageBlock->render(renderer, xPos + xOffset, yPos + yOffset);
 }
 
 void PageImage::renderPlaceholder(GfxRenderer& renderer, const int xOffset, const int yOffset) const {
+  if (renderer.verticalTextActive()) {
+    int x, y;
+    verticalScreenPos(renderer, xOffset, yOffset, x, y);
+    imageBlock->renderPlaceholder(renderer, x, y);
+    return;
+  }
   imageBlock->renderPlaceholder(renderer, xPos + xOffset, yPos + yOffset);
 }
 
