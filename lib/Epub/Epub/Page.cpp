@@ -61,12 +61,34 @@ std::unique_ptr<PageLine> PageLine::deserialize(HalFile& file) {
   return std::unique_ptr<PageLine>(line);
 }
 
+// Screen position of an image laid out in transposed (vertical) space. The
+// image itself is never rotated: xPos is its inline offset (down the screen)
+// and yPos its block offset (right-to-left from the page's right edge), where
+// it occupies its own width of block extent. See PageLine::render.
+void PageImage::verticalScreenPos(const GfxRenderer& renderer, const int xOffset, const int yOffset, int& outX,
+                                  int& outY) const {
+  outX = xOffset + renderer.verticalBlockExtent() - yPos - imageBlock->getWidth();
+  outY = yOffset + xPos;
+}
+
 void PageImage::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
   // Images don't use fontId or text rendering
+  if (renderer.verticalTextActive()) {
+    int x, y;
+    verticalScreenPos(renderer, xOffset, yOffset, x, y);
+    imageBlock->render(renderer, x, y);
+    return;
+  }
   imageBlock->render(renderer, xPos + xOffset, yPos + yOffset);
 }
 
 void PageImage::renderPlaceholder(GfxRenderer& renderer, const int xOffset, const int yOffset) const {
+  if (renderer.verticalTextActive()) {
+    int x, y;
+    verticalScreenPos(renderer, xOffset, yOffset, x, y);
+    imageBlock->renderPlaceholder(renderer, x, y);
+    return;
+  }
   imageBlock->renderPlaceholder(renderer, xPos + xOffset, yPos + yOffset);
 }
 
@@ -147,6 +169,39 @@ void Page::renderWithImagePlaceholders(GfxRenderer& renderer, const int fontId, 
       element->render(renderer, fontId, xOffset, yOffset);
     }
   }
+}
+
+bool Page::getImageBoundingBox(int16_t& outX, int16_t& outY, int16_t& outW, int16_t& outH,
+                               const GfxRenderer* renderer) const {
+  bool found = false;
+  int16_t minX = INT16_MAX, minY = INT16_MAX, maxX = INT16_MIN, maxY = INT16_MIN;
+  for (const auto& el : elements) {
+    if (el->getTag() != TAG_PageImage) continue;
+    const auto& img = static_cast<const PageImage&>(*el);
+    int16_t x = img.xPos;
+    int16_t y = img.yPos;
+    if (renderer != nullptr && renderer->verticalTextActive()) {
+      // Page-origin-relative screen rect (the caller adds the margins).
+      int sx, sy;
+      img.verticalScreenPos(*renderer, 0, 0, sx, sy);
+      x = static_cast<int16_t>(sx);
+      y = static_cast<int16_t>(sy);
+    }
+    const int16_t right = x + img.getImageBlock().getWidth();
+    const int16_t bottom = y + img.getImageBlock().getHeight();
+    minX = std::min(minX, x);
+    minY = std::min(minY, y);
+    maxX = std::max(maxX, right);
+    maxY = std::max(maxY, bottom);
+    found = true;
+  }
+  if (found) {
+    outX = minX;
+    outY = minY;
+    outW = maxX - minX;
+    outH = maxY - minY;
+  }
+  return found;
 }
 
 bool Page::serialize(HalFile& file) const {

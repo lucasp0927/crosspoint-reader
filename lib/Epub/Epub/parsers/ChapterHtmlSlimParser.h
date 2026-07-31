@@ -52,6 +52,13 @@ class ChapterHtmlSlimParser {
   uint8_t paragraphAlignment;
   uint16_t viewportWidth;
   uint16_t viewportHeight;
+  // Vertical CJK mode: viewportWidth/Height above are the TRANSPOSED layout
+  // axes (inline runs down the screen, block runs right-to-left). Text flows in
+  // that space, but an image is a 2-D object that is never rotated, so image
+  // sizing swaps back to real screen extents via the two helpers below.
+  bool verticalMode = false;
+  uint16_t imageMaxWidth() const { return verticalMode ? viewportHeight : viewportWidth; }
+  uint16_t imageMaxHeight() const { return verticalMode ? viewportWidth : viewportHeight; }
   bool hyphenationEnabled;
   bool focusReadingEnabled;
   const CssParser* cssParser;
@@ -146,7 +153,7 @@ class ChapterHtmlSlimParser {
       std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
       const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
       const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
-      const bool focusReadingEnabled,
+      const bool focusReadingEnabled, const bool verticalMode,
       const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
       const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
       const uint8_t imageRendering = 0, std::vector<std::string> tocAnchors = {},
@@ -163,6 +170,7 @@ class ChapterHtmlSlimParser {
         viewportHeight(viewportHeight),
         hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
+        verticalMode(verticalMode),
         completePageFn(completePageFn),
         popupFn(popupFn),
         cssParser(cssParser),
