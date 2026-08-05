@@ -37,7 +37,11 @@ namespace {
 // v38: kinsoku sets extended per clreq (— … ‥ ～ interpuncts, unit suffixes
 //      added to 行首禁則), moving CJK break opportunities — cached line breaks
 //      from v37 no longer match.
-constexpr uint8_t SECTION_FILE_VERSION = 38;
+// v39: vertical-mode image page breaks are decided on the block axis, so an
+//      image following text now breaks to a fresh page instead of overflowing
+//      past the page's block extent. Page boundaries in vertical sections with
+//      mid-chapter images differ from v38. Horizontal layout is unchanged.
+constexpr uint8_t SECTION_FILE_VERSION = 39;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

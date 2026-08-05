@@ -769,10 +769,17 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   }
                 }
 
-                // Create page for image - only break if image won't fit remaining space
+                // Extent this image consumes along the block axis (the axis
+                // currentPageNextY accumulates on). Vertical mode stacks blocks
+                // right-to-left, so an unrotated image spends its screen WIDTH.
+                const int blockExtent = self->verticalMode ? displayWidth : displayHeight;
+
+                // Create page for image - only break if image won't fit remaining space.
+                // Compared against viewportHeight (the block span in layout space),
+                // matching the text path in addLineToPage.
                 if (self->currentPage && !self->currentPage->elements.empty() &&
-                    (self->currentPageNextY + imageMarginTop + displayHeight + imageMarginBottom >
-                     self->imageMaxHeight())) {
+                    (self->currentPageNextY + imageMarginTop + blockExtent + imageMarginBottom >
+                     self->viewportHeight)) {
                   self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex,
                                        self->xpathListItemIndex, self->currentPageVisibleOffset);
                   self->completedPageCount++;
@@ -811,7 +818,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 // right-to-left, so the image is centered along the screen's
                 // vertical axis and consumes its screen WIDTH of block extent.
                 const int inlineExtent = self->verticalMode ? displayHeight : displayWidth;
-                const int blockExtent = self->verticalMode ? displayWidth : displayHeight;
                 const int inlineSpan = self->verticalMode ? self->imageMaxHeight() : self->imageMaxWidth();
                 int xPos = (inlineSpan - inlineExtent) / 2;
                 auto pageImage =
