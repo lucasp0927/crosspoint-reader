@@ -1,9 +1,18 @@
 """
-PlatformIO pre-build script: inject git branch and short SHA into
-CROSSPOINT_VERSION for development environments.
+PlatformIO pre-build script: inject git branch and short SHA into the build.
 
-Results in a version string like:  1.1.0-dev-feat-kosync-xpath-05c6cf8
-Release environments are unaffected; they set CROSSPOINT_VERSION in the ini.
+Two macros, because the version string has consumers that must not change:
+CROSSPOINT_VERSION is compared against the OTA feed (OtaUpdater.cpp), reported
+by the web API, and sent as the HTTP User-Agent.
+
+  CROSSPOINT_VERSION   dev builds only, e.g. 1.1.0-dev-feat-kosync-xpath-05c6cf8
+                       Release envs set this in the ini and are left alone, so
+                       OTA update detection keeps working.
+  CROSSPOINT_BUILD_ID  every other env, e.g. -feat-kosync-05c6cf8 (leading
+                       separator included so it concatenates onto the version
+                       literal). Empty for the default env, whose version
+                       already carries the branch and SHA. Shown on the boot
+                       splash so a device can be traced back to a build.
 """
 
 import configparser
@@ -76,20 +85,38 @@ def get_base_version(project_dir):
     return config.get('crosspoint', 'version')
 
 
-def inject_version(env):
-    # Only applies to development environments; release envs set the
-    # version via build_flags in platformio.ini and are unaffected.
-    if env['PIOENV'] not in ('default', 'sticky'):
-        return
+# The splash line is centred at the panel width, so an unbounded branch name
+# (e.g. fix/handle-crashes-on-very-large-epub-chapters-#2256) would run off
+# both edges. Keep the head, which is the part that identifies the work.
+BRANCH_DISPLAY_MAX = 24
 
+
+def truncate_branch(branch):
+    if len(branch) <= BRANCH_DISPLAY_MAX:
+        return branch
+    return branch[:BRANCH_DISPLAY_MAX - 1] + '~'
+
+
+def inject_version(env):
     project_dir = env['PROJECT_DIR']
-    base_version = get_base_version(project_dir)
     branch = get_git_branch(project_dir)
     short_sha = get_git_short_sha(project_dir)
-    version_string = f'{base_version}-dev-{branch}-{short_sha}'
 
-    env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
-    print(f'CrossPoint build version: {version_string}')
+    if env['PIOENV'] in ('default', 'sticky'):
+        # Dev builds fold the branch and SHA into the version itself, so the
+        # build id would only repeat it on the splash.
+        base_version = get_base_version(project_dir)
+        version_string = f'{base_version}-dev-{branch}-{short_sha}'
+        env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
+        env.Append(CPPDEFINES=[('CROSSPOINT_BUILD_ID', '\\"\\"')])
+        print(f'CrossPoint build version: {version_string}')
+        return
+
+    # Release-style envs keep the CROSSPOINT_VERSION set in the ini so OTA
+    # comparison stays exact; the provenance rides alongside it instead.
+    build_id = f'-{truncate_branch(branch)}-{short_sha}'
+    env.Append(CPPDEFINES=[('CROSSPOINT_BUILD_ID', f'\\"{build_id}\\"')])
+    print(f'CrossPoint build id: {build_id}')
 
 
 # PlatformIO/SCons entry point — Import and env are SCons builtins injected at runtime.
