@@ -26,6 +26,7 @@
 #include "Epub/Page.h"
 #include "Epub/ReaderRenderSpec.h"
 #include "Epub/Section.h"
+#include "Epub/blocks/ImageBlock.h"
 #include "GfxRenderer.h"
 #include "HalDisplay.h"
 #include "HalStorage.h"
@@ -53,6 +54,7 @@ struct Args {
   int statusBar = 19;  // UITheme::getStatusBarHeight() with default settings
   bool list = false;
   bool extraParagraphSpacing = true;  // SETTINGS default
+  bool embeddedStyle = true;          // SETTINGS.embeddedStyle default (book CSS honoured)
   int alignment = 0;                  // JUSTIFIED
   bool vertical = false;              // vertical CJK mode (columns top-to-bottom, right-to-left)
 };
@@ -98,6 +100,8 @@ bool parseArgs(int argc, char** argv, Args& a) {
       a.vertical = true;
     } else if (k == "--no-extra-spacing") {
       a.extraParagraphSpacing = false;
+    } else if (k == "--no-embedded-style") {
+      a.embeddedStyle = false;
     } else if (k == "--align" && next(v)) {
       a.alignment = atoi(v.c_str());
     } else {
@@ -155,7 +159,8 @@ int main(int argc, char** argv) {
     fprintf(stderr,
             "usage: render_pages --epub <file.epub> [--fonts <dir>] [--family N] [--size 14]\n"
             "                    [--spine N | --list] [--pages A-B] [--out dir] [--sdroot dir]\n"
-            "                    [--margin 5] [--statusbar 19] [--no-extra-spacing] [--align 0]\n");
+            "                    [--margin 5] [--statusbar 19] [--no-extra-spacing] [--align 0]\n"
+            "                    [--vertical] [--no-embedded-style]\n");
     return 2;
   }
 
@@ -211,6 +216,13 @@ int main(int argc, char** argv) {
   printf("book: \"%s\" by \"%s\", %d spine items\n", epub->getTitle().c_str(), epub->getAuthor().c_str(),
          epub->getSpineItemsCount());
 
+  // Same lazy-extraction hook EpubReaderActivity.cpp:164 installs. Section
+  // builds only header-probe images, so without this every image renders as an
+  // empty placeholder here regardless of whether the device would show it.
+  ImageBlock::setExtractor(epub.get(), [](void* ctx, const char* src, const char* dest) {
+    return static_cast<Epub*>(ctx)->extractItemToFile(src, dest);
+  });
+
   if (a.list || a.spine < 0) {
     for (int i = 0; i < epub->getSpineItemsCount(); i++) {
       printf("  spine %2d: %s\n", i, epub->getSpineItem(i).href.c_str());
@@ -237,7 +249,7 @@ int main(int argc, char** argv) {
   spec.viewportWidth = viewportWidth;
   spec.viewportHeight = viewportHeight;
   spec.hyphenationEnabled = false;
-  spec.embeddedStyle = true;
+  spec.embeddedStyle = a.embeddedStyle;
   spec.imageRendering = 0;
   spec.focusReadingEnabled = false;
   spec.verticalMode = a.vertical;
