@@ -17,6 +17,7 @@
 // none of which exists here. The device already logs that every 10s from
 // main.cpp:469 via getMinFreeHeap().
 
+#include <algorithm>
 #include <gtest/gtest.h>
 
 #include <cstdlib>

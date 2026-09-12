@@ -11446,7 +11446,14 @@ static const EpdFontData emberplex_14_bold = {
     nullptr,
     emberplex_14_boldKernLeftClasses,
     emberplex_14_boldKernRightClasses,
+    nullptr,  // kernLeftCodepoints (packed class maps used instead)
+    nullptr,  // kernLeftClassIds
+    nullptr,  // kernRightCodepoints
+    nullptr,  // kernRightClassIds
     emberplex_14_boldKernMatrix,
+    nullptr,  // kernRowOffsets (dense matrix used instead)
+    nullptr,  // kernSparseCols
+    nullptr,  // kernSparseValues
     409,
     334,
     119,

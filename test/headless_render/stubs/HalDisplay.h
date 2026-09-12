@@ -72,6 +72,8 @@ class HalDisplay {
   void displayGrayBuffer(bool = false) {}
   void writeGrayscalePlaneStrip(bool, const uint8_t*, uint16_t, uint16_t) {}
   bool supportsStripGrayscale() const { return false; }
+  bool combinesGrayscaleBase() const { return false; }
+  bool isInverted() const { return false; }
 
   uint16_t getDisplayWidth() const { return DISPLAY_WIDTH; }
   uint16_t getDisplayHeight() const { return DISPLAY_HEIGHT; }

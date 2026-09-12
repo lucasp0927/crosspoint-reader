@@ -354,7 +354,11 @@ TEST(SdCardFontPageTurn, OneNewGlyphForcesFullRebuild) {
 //    not the order of magnitude a high-overlap guess suggests.
 constexpr int kRealNewFraction = 62;  // percent of a page that is new, measured
 
-TEST(SdCardFontPageTurn, RealisticOverlapRebuildsEverything) {
+// Since upstream #3071 prewarm is accumulative: the rebuild unions the
+// codepoints already resident with the request (up to MAX_PAGE_GLYPHS), so a
+// page turn re-reads the previous page's glyphs as well as the new ones —
+// old ∪ new, not the new fraction, and not just the current page either.
+TEST(SdCardFontPageTurn, RealisticOverlapRebuildsUnion) {
   SdCardFont font;
   ASSERT_TRUE(font.load(fixturePath().c_str()));
 
@@ -368,7 +372,7 @@ TEST(SdCardFontPageTurn, RealisticOverlapRebuildsEverything) {
   const auto c = sdstub::counters();
   std::printf("[ page real ] %d%% new -> reads=%d (incremental would read %d)\n", kRealNewFraction, c.reads,
               2 * shift);
-  EXPECT_EQ(c.reads, 2 * kPageChars) << "the whole page rebuilds, not just the new glyphs";
+  EXPECT_EQ(c.reads, 2 * (kPageChars + shift)) << "old and new page glyphs are all re-read, not just the new ones";
 }
 
 // The silent stall: below MINI_RETAIN_MIN_FREE_HEAP (40KB) resetStyleMiniData
