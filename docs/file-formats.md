@@ -90,11 +90,36 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 35
+### Version 39
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 39 is binary-identical to version 38. The version was bumped because
+vertical-mode page breaks for images are now decided on the block axis: an image
+following text breaks to a fresh page instead of overflowing past the page's
+block extent, so page boundaries in vertical sections containing mid-chapter
+images no longer match v38. Horizontal layout is unaffected.
+
+Version 38 is binary-identical to version 37. The version was bumped because the
+kinsoku sets were consolidated into `lib/Utf8/CjkTypesetting.h` and extended per
+clreq — dashes (— ― ⸺ ⸻ and the U+2500/U+2501 box-drawing rules Taiwanese EPUBs
+use as em dashes), ellipses (… ‥), the wave dash, interpuncts (· ‧ ・) and unit
+suffixes (° ′ ″) were added to the forbidden-line-start set (行首禁則). That moves
+CJK break opportunities, so cached v37 line breaks no longer match.
+
+Version 37 adds a `bool verticalMode` field to the header, written after
+`focusReadingEnabled`, growing the header by one byte. Vertical CJK layout runs
+in transposed space — the inline axis (line length) runs down the screen and the
+block axis (line stacking) runs right-to-left — so its cached pages are not
+interchangeable with horizontal ones and the flag must participate in
+cache-busting. The header still stores the untransposed `viewportWidth` and
+`viewportHeight`; the swap is applied only when invoking the parser.
+
+Version 36 is binary-identical to version 35. The version was bumped because
+ruby justification and CJK short-line handling changed line breaking, so word
+positions cached by v35 no longer match what the layout engine now produces.
 
 Version 35 adds a header offset and a `uint32_t` entry per page for the
 visible-text offset LUT. The other section LUTs remain unchanged.
@@ -135,7 +160,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 35
+#define EXPECTED_VERSION 39
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 96
@@ -297,6 +322,7 @@ struct SectionBin {
     bool embeddedStyle;
     u8 imageRendering;
     bool focusReadingEnabled;
+    bool verticalMode;
 
     u16 pageCount;
     u32 pageLutOffset;
