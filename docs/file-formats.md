@@ -90,17 +90,36 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 45
-
-Version 45 keeps the version 44 serialized layout unchanged. It was bumped
-because internal EPUB links now preserve CSS superscript and subscript styles,
-changing their cached word-style flags and page layout.
-
-### Version 44
+### Version 48
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 48 is binary-identical to version 47. The version was bumped because
+vertical-mode page breaks for images are now decided on the block axis: an image
+following text breaks to a fresh page instead of overflowing past the page's
+block extent, so page boundaries in vertical sections containing mid-chapter
+images no longer match v47. Horizontal layout is unaffected.
+
+Version 47 is binary-identical to version 46. The version was bumped because the
+kinsoku sets were consolidated into `lib/Utf8/CjkTypesetting.h` and extended per
+clreq — dashes (— ― ⸺ ⸻ and the U+2500/U+2501 box-drawing rules Taiwanese EPUBs
+use as em dashes), ellipses (… ‥), the wave dash, interpuncts (· ‧ ・) and unit
+suffixes (° ′ ″) were added to the forbidden-line-start set (行首禁則). That moves
+CJK break opportunities, so cached v46 line breaks no longer match.
+
+Version 46 adds a `bool verticalMode` field to the header, written after
+`focusReadingEnabled`, growing the header by one byte. Vertical CJK layout runs
+in transposed space — the inline axis (line length) runs down the screen and the
+block axis (line stacking) runs right-to-left — so its cached pages are not
+interchangeable with horizontal ones and the flag must participate in
+cache-busting. The header still stores the untransposed `viewportWidth` and
+`viewportHeight`; the swap is applied only when invoking the parser.
+
+Version 45 keeps the version 44 serialized layout unchanged. It was bumped
+because internal EPUB links now preserve CSS superscript and subscript styles,
+changing their cached word-style flags and page layout.
 
 Version 44 appends the internal-link rectangles produced during text layout to
 each serialized page. The reader uses these rectangles for touch navigation;
@@ -175,7 +194,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 41
+#define EXPECTED_VERSION 48
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
@@ -338,6 +357,7 @@ struct SectionBin {
     bool embeddedStyle;
     u8 imageRendering;
     bool focusReadingEnabled;
+    bool verticalMode;
 
     u16 pageCount;
     u32 pageLutOffset;
